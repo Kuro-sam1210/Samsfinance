@@ -1,9 +1,8 @@
-pragma solidity ^0.5.0;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
-import "openzeppelin-solidity/contracts/utils/ReentrancyGuard.sol";
-import "openzeppelin-solidity/contracts/utils/Address.sol";
-import "openzeppelin-solidity/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "../libraries/openzeppelin-upgradeability/VersionedInitializable.sol";
 
 import "../configuration/LendingPoolAddressesProvider.sol";
@@ -19,13 +18,12 @@ import "./LendingPoolLiquidationManager.sol";
 import "../libraries/EthAddressLib.sol";
 
 /**
-* @title LendingPool contract
-* @notice Implements the actions of the LendingPool, and exposes accessory methods to fetch the users and reserve data
-* @author Aave
+ * @title SamsPool contract
+ * @notice Implements the actions of the SamsPool with enhanced features, and exposes accessory methods to fetch the users and reserve data
+ * @author SamsFinance Protocol
  **/
 
-contract LendingPool is ReentrancyGuard, VersionedInitializable {
-    using SafeMath for uint256;
+contract SamsPool is ReentrancyGuard, VersionedInitializable {
     using WadRayMath for uint256;
     using Address for address;
 
@@ -36,18 +34,30 @@ contract LendingPool is ReentrancyGuard, VersionedInitializable {
     IFeeProvider feeProvider;
 
     /**
-    * @dev emitted on deposit
-    * @param _reserve the address of the reserve
-    * @param _user the address of the user
-    * @param _amount the amount to be deposited
-    * @param _referral the referral number of the action
-    * @param _timestamp the timestamp of the action
-    **/
+     * @dev emitted on deposit
+     * @param _reserve the address of the reserve
+     * @param _user the address of the user
+     * @param _amount the amount to be deposited
+     * @param _referral the referral number of the action
+     * @param _timestamp the timestamp of the action
+     **/
     event Deposit(
         address indexed _reserve,
         address indexed _user,
         uint256 _amount,
         uint16 indexed _referral,
+        uint256 _timestamp
+    );
+
+    /**
+     * @dev emitted on first deposit by a user
+     * @param _reserve the address of the reserve
+     * @param _user the address of the user
+     * @param _timestamp the timestamp of the action
+     **/
+    event FirstDeposit(
+        address indexed _reserve,
+        address indexed _user,
         uint256 _timestamp
     );
 
@@ -66,17 +76,17 @@ contract LendingPool is ReentrancyGuard, VersionedInitializable {
     );
 
     /**
-    * @dev emitted on borrow
-    * @param _reserve the address of the reserve
-    * @param _user the address of the user
-    * @param _amount the amount to be deposited
-    * @param _borrowRateMode the rate mode, can be either 1-stable or 2-variable
-    * @param _borrowRate the rate at which the user has borrowed
-    * @param _originationFee the origination fee to be paid by the user
-    * @param _borrowBalanceIncrease the balance increase since the last borrow, 0 if it's the first time borrowing
-    * @param _referral the referral number of the action
-    * @param _timestamp the timestamp of the action
-    **/
+     * @dev emitted on borrow
+     * @param _reserve the address of the reserve
+     * @param _user the address of the user
+     * @param _amount the amount to be deposited
+     * @param _borrowRateMode the rate mode, can be either 1-stable or 2-variable
+     * @param _borrowRate the rate at which the user has borrowed
+     * @param _originationFee the origination fee to be paid by the user
+     * @param _borrowBalanceIncrease the balance increase since the last borrow, 0 if it's the first time borrowing
+     * @param _referral the referral number of the action
+     * @param _timestamp the timestamp of the action
+     **/
     event Borrow(
         address indexed _reserve,
         address indexed _user,
@@ -86,6 +96,18 @@ contract LendingPool is ReentrancyGuard, VersionedInitializable {
         uint256 _originationFee,
         uint256 _borrowBalanceIncrease,
         uint16 indexed _referral,
+        uint256 _timestamp
+    );
+
+    /**
+     * @dev emitted on first borrow by a user
+     * @param _reserve the address of the reserve
+     * @param _user the address of the user
+     * @param _timestamp the timestamp of the action
+     **/
+    event FirstBorrow(
+        address indexed _reserve,
+        address indexed _user,
         uint256 _timestamp
     );
 
@@ -135,11 +157,19 @@ contract LendingPool is ReentrancyGuard, VersionedInitializable {
     event ReserveUsedAsCollateralEnabled(address indexed _reserve, address indexed _user);
 
     /**
-    * @dev emitted when a user disables a reserve as collateral
-    * @param _reserve the address of the reserve
-    * @param _user the address of the user
-    **/
+     * @dev emitted when a user disables a reserve as collateral
+     * @param _reserve the address of the reserve
+     * @param _user the address of the user
+     **/
     event ReserveUsedAsCollateralDisabled(address indexed _reserve, address indexed _user);
+
+    /**
+     * @dev emitted when a user first enables any reserve as collateral
+     * @param _reserve the address of the reserve
+     * @param _user the address of the user
+     * @param _timestamp the timestamp of the action
+     **/
+    event FirstCollateralEnabled(address indexed _reserve, address indexed _user, uint256 _timestamp);
 
     /**
     * @dev emitted when the stable rate of a user gets rebalanced
@@ -319,6 +349,10 @@ contract LendingPool is ReentrancyGuard, VersionedInitializable {
         //solium-disable-next-line
         emit Deposit(_reserve, msg.sender, _amount, _referralCode, block.timestamp);
 
+        if (isFirstDeposit) {
+            emit FirstDeposit(_reserve, msg.sender, block.timestamp);
+        }
+
     }
 
     /**
@@ -343,7 +377,7 @@ contract LendingPool is ReentrancyGuard, VersionedInitializable {
         uint256 currentAvailableLiquidity = core.getReserveAvailableLiquidity(_reserve);
         require(
             currentAvailableLiquidity >= _amount,
-            "There is not enough liquidity available to redeem"
+            "Insufficient reserve liquidity available for the requested redemption amount"
         );
 
         core.updateStateOnRedeem(_reserve, _user, _amount, _aTokenBalanceAfterRedeem == 0);
@@ -417,7 +451,7 @@ contract LendingPool is ReentrancyGuard, VersionedInitializable {
 
         require(
             vars.availableLiquidity >= _amount,
-            "There is not enough liquidity available in the reserve"
+            "Insufficient liquidity available in the reserve for the requested borrow amount"
         );
 
         (
@@ -508,6 +542,10 @@ contract LendingPool is ReentrancyGuard, VersionedInitializable {
             //solium-disable-next-line
             block.timestamp
         );
+
+        if (vars.userBorrowBalanceETH == 0) {
+            emit FirstBorrow(_reserve, msg.sender, block.timestamp);
+        }
     }
 
     /**
@@ -784,10 +822,16 @@ contract LendingPool is ReentrancyGuard, VersionedInitializable {
             "User deposit is already being used as collateral"
         );
 
+        (, uint256 totalCollateralETH, , , , , , ) = dataProvider.getUserAccountData(msg.sender);
+        bool isFirstCollateralEnable = totalCollateralETH == 0 && _useAsCollateral;
+
         core.setUserUseReserveAsCollateral(_reserve, msg.sender, _useAsCollateral);
 
         if (_useAsCollateral) {
             emit ReserveUsedAsCollateralEnabled(_reserve, msg.sender);
+            if (isFirstCollateralEnable) {
+                emit FirstCollateralEnabled(_reserve, msg.sender, block.timestamp);
+            }
         } else {
             emit ReserveUsedAsCollateralDisabled(_reserve, msg.sender);
         }
@@ -833,13 +877,20 @@ contract LendingPool is ReentrancyGuard, VersionedInitializable {
     }
 
     /**
-    * @dev allows smartcontracts to access the liquidity of the pool within one transaction,
-    * as long as the amount taken plus a fee is returned. NOTE There are security concerns for developers of flashloan receiver contracts
-    * that must be kept into consideration. For further details please visit https://developers.aave.com
-    * @param _receiver The address of the contract receiving the funds. The receiver should implement the IFlashLoanReceiver interface.
-    * @param _reserve the address of the principal reserve
-    * @param _amount the amount requested for this flashloan
-    **/
+     * @dev allows smartcontracts to access the liquidity of the pool within one transaction,
+     * as long as the amount taken plus a fee is returned. NOTE There are security concerns for developers of flashloan receiver contracts
+     * that must be kept into consideration. For further details please visit https://developers.aave.com
+     *
+     * SECURITY CONSIDERATIONS:
+     * - Flash loan receivers must implement proper reentrancy protection
+     * - The receiver contract must return the borrowed amount plus fee in the same transaction
+     * - Malicious receivers could attempt to manipulate prices or drain liquidity if not carefully designed
+     * - Always validate the receiver contract and its logic before integration
+     *
+     * @param _receiver The address of the contract receiving the funds. The receiver should implement the IFlashLoanReceiver interface.
+     * @param _reserve the address of the principal reserve
+     * @param _amount the amount requested for this flashloan
+     **/
     function flashLoan(address _receiver, address _reserve, uint256 _amount, bytes memory _params)
         public
         nonReentrant
@@ -982,6 +1033,22 @@ contract LendingPool is ReentrancyGuard, VersionedInitializable {
 
     function getReserves() external view returns (address[] memory) {
         return core.getReserves();
+    }
+
+    /**
+     * @dev Returns the protocol version as a string
+     * @return The protocol version string
+     **/
+    function getProtocolVersion() external pure returns (string memory) {
+        return "SamsFinance Protocol v1.1";
+    }
+
+    /**
+     * @dev Returns a custom greeting message
+     * @return A welcome message for the SamsFinance protocol
+     **/
+    function getCustomGreeting() external pure returns (string memory) {
+        return "Welcome to SamsFinance - Your Enhanced DeFi Lending Experience!";
     }
 
     /**
