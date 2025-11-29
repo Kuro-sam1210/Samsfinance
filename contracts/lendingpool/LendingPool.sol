@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 import "../libraries/openzeppelin-upgradeability/VersionedInitializable.sol";
 
 import "../configuration/LendingPoolAddressesProvider.sol";
@@ -23,9 +24,11 @@ import "../libraries/EthAddressLib.sol";
  * @author SamsFinance Protocol
  **/
 
-contract SamsPool is ReentrancyGuard, VersionedInitializable {
+contract SamsPool is ReentrancyGuard, VersionedInitializable, Ownable {
     using WadRayMath for uint256;
     using Address for address;
+
+    bool public paused;
 
     LendingPoolAddressesProvider public addressesProvider;
     LendingPoolCore public core;
@@ -254,6 +257,9 @@ contract SamsPool is ReentrancyGuard, VersionedInitializable {
         uint256 _timestamp
     );
 
+    event Paused(address account);
+    event Unpaused(address account);
+
     /**
     * @dev functions affected by this modifier can only be invoked by the
     * aToken.sol contract
@@ -296,6 +302,11 @@ contract SamsPool is ReentrancyGuard, VersionedInitializable {
         _;
     }
 
+    modifier whenNotPaused() {
+        require(!paused, "Contract is paused");
+        _;
+    }
+
     uint256 public constant UINT_MAX_VALUE = uint256(-1);
 
     uint256 public constant LENDINGPOOL_REVISION = 0x3;
@@ -330,6 +341,7 @@ contract SamsPool is ReentrancyGuard, VersionedInitializable {
         external
         payable
         nonReentrant
+        whenNotPaused
         onlyActiveReserve(_reserve)
         onlyUnfreezedReserve(_reserve)
         onlyAmountGreaterThanZero(_amount)
@@ -510,7 +522,7 @@ contract SamsPool is ReentrancyGuard, VersionedInitializable {
             //calculate the max available loan size in stable rate mode as a percentage of the
             //available liquidity
             uint256 maxLoanPercent = parametersProvider.getMaxStableRateBorrowSizePercent();
-            uint256 maxLoanSizeStable = vars.availableLiquidity.mul(maxLoanPercent).div(100);
+            uint256 maxLoanSizeStable = vars.availableLiquidity * maxLoanPercent / 100;
 
             require(
                 _amount <= maxLoanSizeStable,
@@ -1070,5 +1082,15 @@ contract SamsPool is ReentrancyGuard, VersionedInitializable {
     **/
     function requireAmountGreaterThanZeroInternal(uint256 _amount) internal pure {
         require(_amount > 0, "Amount must be greater than 0");
+    }
+
+    function pause() external onlyOwner {
+        paused = true;
+        emit Paused(msg.sender);
+    }
+
+    function unpause() external onlyOwner {
+        paused = false;
+        emit Unpaused(msg.sender);
     }
 }
